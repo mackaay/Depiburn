@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH --time=73:59:00
+#SBATCH --mem=230gb
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=2     
+
+
+module load R/4.4.1
+
+
+cd ${SLURM_SUBMIT_DIR}
+
+Rscript ./fragment_plot.R
+
