@@ -1,0 +1,125 @@
+#!/bin/bash
+#SBATCH --time=74:59:00
+#SBATCH --mem=200gb
+#SBATCH --ntasks-per-node=5
+#SBATCH --cpus-per-task=5     
+#SBATCH --gpus-per-node=1
+#SBATCH --account=OD-228970
+
+
+module load minimap2/2.28
+module load blue-crab/0.1.1
+#module load slow5tools/1.2.0
+module load modkit/0.4.1
+module load chopper/0.8.0
+module load samtools/1.18.0
+module load  bracken/2.9
+
+
+cd ${SLURM_SUBMIT_DIR}
+
+
+#Merge blow5 files
+slow5dorado=/datasets/work/hb-burns-meth/work/Data/package/slow5-dorado/bin/slow5-dorado
+slow5tools=/datasets/work/hb-burns-meth/work/Data/package/slow5tools-v1.3.0/slow5tools
+dorado=/datasets/work/hb-burns-meth/work/Data/package/dorado-1.3.0-linux-x64/bin/dorado
+hg38=/datasets/work/hb-meth-atlas/work/pipeline_data/Genomes/hg38/hg38.fa
+MODEL=/datasets/work/hb-burns-meth/work/Data/package/dna_r10.4.1_e8.2_400bps_hac@v5.0.0
+
+# --- Configuration ---
+BLOW5_DIR="./input_blow5"
+POD5_DIR="./pod5_out"
+BASECALL_DIR="./dorado_output"
+DEMUX_DIR="./fastq_demux"
+CLEAN_DIR="./fastq_dehosted"
+REPORTS_DIR="./reports"
+THREADS=24
+GPU_DEVICE="cuda:0" # Change to "all" for multi-GPU
+KRAKEN_DB=/datasets/work/hb-diab-cfdna/work/Data/annotation/kraken2_db
+HUMAN_REF="human-t2t-hla" # Hostile's default T2T reference
+HUMAN_REF_MMI=/datasets/work/hb-burns-meth/work/Data/human_reference.mmi
+kraken2=/datasets/work/hb-exvivotcell/work/Data/packages/kraken2/kraken2
+
+# Create directories
+mkdir -p $POD5_DIR $BASECALL_DIR $DEMUX_DIR $CLEAN_DIR $REPORTS_DIR
+
+# 1. Convert BLOW5 to POD5
+echo "Converting BLOW5 to POD5..."
+blue-crab s2p $BLOW5_DIR -d $POD5_DIR 
+
+# 2. Basecalling & Demultiplexing
+# Note: Replace 'dna_r10.4.1_e8.2_400bps_hac@v4.1.0' with your specific flowcell/kit model
+# Replace 'SQK-NBD114-24' with your actual barcoding kit
+echo "Basecalling with Dorado..."
+$dorado basecaller $MODEL $POD5_DIR --kit-name SQK-NBD114-24 > $BASECALL_DIR/calls.bam
+
+echo "Demultiplexing..."
+$dorado demux --output-dir ./fastq_demux --emit-fastq  --kit-name SQK-NBD114-24 ./dorado_output/calls.bam
+
+# 3. Loop through each barcode for De-hosting and Classification
+cat $DEMUX_DIR/list | while read fastq ; do 
+    sample_name=$(basename "$fastq" .fastq)
+    echo "Processing sample: $sample_name"
+
+    # A. Quality Filtering (Q>10, Length > 500bp)
+    #cat "$fastq" | chopper -q 10 -l 500 > "$DEMUX_DIR/${sample_name}_filtered.fastq"
+
+    # B. De-hosting (Removing Human Reads)
+    echo "Removing human host reads..."
+    #hostile clean \
+    #    --fastq1 "$DEMUX_DIR/${sample_name}_filtered.fastq" \
+    #    --target $HUMAN_REF \
+    #    --threads $THREADS \
+    #    --out-dir $CLEAN_DIR
+	
+# 1. Map to human reference (e.g., T2T-CHM13)
+minimap2 -ax map-ont -t $THREADS $HUMAN_REF_MMI "$DEMUX_DIR/${sample_name}.fastq.gz" | samtools view -bS - > $DEMUX_DIR/${sample_name}.aligned.bam
+# 2. Extract UNMAPPED reads (Flag -f 4)
+# -F 256 excludes secondary alignments to keep it clean
+samtools view -b -f 4 -F 256 $DEMUX_DIR/${sample_name}.aligned.bam > $CLEAN_DIR/${sample_name}.dehosted.bam
+# 3. Convert back to FASTQ
+samtools fastq $CLEAN_DIR/${sample_name}.dehosted.bam > $CLEAN_DIR/${sample_name}.dehosted.fastq
+
+    # C. Taxonomic Classification (Kraken2)
+    echo "Running Kraken2..."
+    kraken2 --db $KRAKEN_DB \
+        --threads $THREADS \
+        --confidence 0.1 \
+        --report "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        "$CLEAN_DIR/${sample_name}.dehosted.fastq" > "$REPORTS_DIR/${sample_name}_kraken_output.txt"
+
+bracken-build -d $KRAKEN_DB -t 24 -k 35 -l 1000
+
+    # D. Abundance Estimation (Bracken)
+    echo "Running Bracken..."
+    bracken -d $KRAKEN_DB \
+        -i "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        -o "$REPORTS_DIR/${sample_name}_bracken_S.txt" \
+        -r 1000 -l S # Species level
+	bracken -d $KRAKEN_DB \
+        -i "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        -o "$REPORTS_DIR/${sample_name}_bracken_S1.txt" \
+        -r 1000 -l S1 # Species level	
+		
+	bracken -d $KRAKEN_DB \
+        -i "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        -o "$REPORTS_DIR/${sample_name}_bracken_G.txt" \
+        -r 1000 -l G # Species level	
+		
+	bracken -d $KRAKEN_DB \
+        -i "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        -o "$REPORTS_DIR/${sample_name}_bracken_F.txt" \
+        -r 1000 -l F # Species level	
+
+	bracken -d $KRAKEN_DB \
+        -i "$REPORTS_DIR/${sample_name}_kraken_report.txt" \
+        -o "$REPORTS_DIR/${sample_name}_bracken_D.txt" \
+        -r 1000 -l D # Species level		
+	
+		
+		
+		
+done
+
+
+echo "Workflow Complete!"
