@@ -1,0 +1,90 @@
+#!/bin/bash
+#SBATCH --time=124:59:00
+#SBATCH --mem=200gb
+#SBATCH --ntasks-per-node=5
+#SBATCH --cpus-per-task=5     
+#SBATCH --gpus-per-node=1
+#SBATCH --account=OD-228970
+
+
+module load minimap2/2.28
+module load blue-crab/0.1.1
+#module load slow5tools/1.2.0
+module load modkit/0.4.1
+module load samtools/1.18.0
+
+
+cd ${SLURM_SUBMIT_DIR}
+
+
+#Merge blow5 files
+slow5dorado=/datasets/work/hb-burns-meth/work/Data/package/slow5-dorado/bin/slow5-dorado
+slow5tools=/datasets/work/hb-burns-meth/work/Data/package/slow5tools-v1.3.0/slow5tools
+dorado=/datasets/work/hb-burns-meth/work/Data/package/dorado-1.3.0-linux-x64/bin/dorado
+hg38=/datasets/work/hb-meth-atlas/work/pipeline_data/Genomes/hg38/hg38.fa
+MODEL=/datasets/work/hb-burns-meth/work/Data/package/dna_r10.4.1_e8.2_400bps_hac@v5.0.0
+
+
+#merge blow5 files 
+$slow5tools merge ./PGAXXX250010_reads.blow5  ./PGAXXF250024_reads.blow5 ./PGAXXF250025_reads.blow5 -t 24 -o combined.blow5
+
+#GPU , alignment
+$slow5dorado basecaller $MODEL  ./combined.blow5 --kit-name SQK-NBD114-24 --modified-bases 5mCG_5hmCG --slow5_threads 24 --reference $hg38 > multiplexed_aligned.bam
+
+#demultiplexing
+$dorado demux --output-dir demux_samples --no-classify -t 24  multiplexed_aligned.bam
+
+
+#merge bam files 
+samtools merge -@ 4  ./QUT181_2.bam  ./CHEMA*/*/bam_pass/barcode13/*.bam
+samtools merge -@ 4  ./QUT182.bam  ./CHEMA*/*/bam_pass/barcode14/*.bam
+samtools merge -@ 4  ./QUT206.bam  ./CHEMA*/*/bam_pass/barcode15/*.bam
+samtools merge -@ 4  ./QUT221.bam  ./CHEMA*/*/bam_pass/barcode16/*.bam
+samtools merge -@ 4  ./QUT224.bam  ./CHEMA*/*/bam_pass/barcode17/*.bam
+samtools merge -@ 4  ./QUT249.bam  ./CHEMA*/*/bam_pass/barcode18/*.bam
+samtools merge -@ 4  ./QUT209.bam  ./CHEMA*/*/bam_pass/barcode19/*.bam
+samtools merge -@ 4  ./QUT214.bam  ./CHEMA*/*/bam_pass/barcode20/*.bam
+samtools merge -@ 4  ./QUT229.bam  ./CHEMA*/*/bam_pass/barcode21/*.bam
+samtools merge -@ 4  ./QUT222.bam  ./CHEMA*/*/bam_pass/barcode22/*.bam
+samtools merge -@ 4  ./QUT187.bam  ./CHEMA*/*/bam_pass/barcode23/*.bam
+samtools merge -@ 4  ./QUT30_2.bam  ./CHEMA*/*/bam_pass/barcode24/*.bam
+
+samtools sort -@ 4 ./QUT181_2.bam -o ./QUT181_2_s.bam 
+samtools sort -@ 4  ./QUT182.bam  -o ./QUT182_s.bam 
+samtools sort -@ 4  ./QUT206.bam  -o ./QUT206_s.bam 
+samtools sort -@ 4  ./QUT221.bam   -o ./QUT221_s.bam
+samtools sort -@ 4  ./QUT224.bam   -o ./QUT224_s.bam
+samtools sort -@ 4  ./QUT249.bam   -o ./QUT249_s.bam
+samtools sort -@ 4  ./QUT209.bam   -o ./QUT209_s.bam 
+samtools sort -@ 4  ./QUT214.bam   -o ./QUT214_s.bam
+samtools sort -@ 4  ./QUT229.bam  -o ./QUT229_s.bam
+samtools sort -@ 4  ./QUT222.bam   -o ./QUT222_s.bam 
+samtools sort -@ 4  ./QUT187.bam   -o ./QUT187_s.bam 
+samtools sort -@ 4  ./QUT30_2.bam   -o ./QUT30_2_s.bam
+
+samtools index ./QUT181_2_s.bam 
+samtools index -@ 4  ./QUT182_s.bam 
+samtools index -@ 4  ./QUT206_s.bam 
+samtools index -@ 4   ./QUT221_s.bam
+samtools index -@ 4  ./QUT224_s.bam
+samtools index -@ 4   ./QUT249_s.bam
+samtools index -@ 4   ./QUT209_s.bam 
+samtools index -@ 4   ./QUT214_s.bam
+samtools index -@ 4   ./QUT229_s.bam
+samtools index -@ 4   ./QUT222_s.bam 
+samtools index -@ 4   ./QUT187_s.bam 
+samtools index -@ 4   ./QUT30_2_s.bam
+
+
+
+
+#modkit pileup -t 24 demux_samples/barcode01.bam   sample01_methylation.bed   --ref $hg38
+
+
+
+cat list | while read id ; do awk '$10 >= 10' ${id}_methylation.bed > ${id}_methylation_filtered.bed; done 
+cat list | while read id ; do awk '$4 == "m"'  ${id}_methylation.bed > ${id}_5mC.bed; done 
+cat list | while read id; do awk '$10 >= 3' ${id}_5mC.bed > ${id}_5mC_filter3Cov.bed ; done 
+cat list | while read id; do awk '$10 >= 5' ${id}_5mC.bed > ${id}_5mC_filter5Cov.bed ; done 
+cat ../list | while read id; do awk '$10 >= 2' ${id}_5mC.bed > ${id}_5mC_filter2Cov.bed ; done 
+cat ../list | while read id; do awk '$10 >= 4' ${id}_5mC.bed > ${id}_5mC_filter4Cov.bed ; done 
