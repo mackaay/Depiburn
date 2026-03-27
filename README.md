@@ -1,2 +1,2 @@
 # Depiburn
-EMseq and ONT seq for samples
+EMseq and ONT seq for cfDNA samples
